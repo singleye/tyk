@@ -1,22 +1,15 @@
 package gateway
 
 import (
-	"bytes"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"io/ioutil"
-	"math/big"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/TykTechnologies/tyk/apidef"
 	"github.com/TykTechnologies/tyk/certs"
@@ -47,38 +40,6 @@ func getTLSClient(cert *tls.Certificate, caCert []byte) *http.Client {
 	return &http.Client{Transport: transport}
 }
 
-func genCertificate(template *x509.Certificate) ([]byte, []byte, []byte, tls.Certificate) {
-	priv, _ := rsa.GenerateKey(rand.Reader, 512)
-
-	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	serialNumber, _ := rand.Int(rand.Reader, serialNumberLimit)
-	template.SerialNumber = serialNumber
-	template.BasicConstraintsValid = true
-	template.NotBefore = time.Now()
-	template.NotAfter = template.NotBefore.Add(time.Hour)
-
-	derBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &priv.PublicKey, priv)
-
-	var certPem, keyPem bytes.Buffer
-	pem.Encode(&certPem, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
-	pem.Encode(&keyPem, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
-
-	clientCert, _ := tls.X509KeyPair(certPem.Bytes(), keyPem.Bytes())
-
-	combinedPEM := bytes.Join([][]byte{certPem.Bytes(), keyPem.Bytes()}, []byte("\n"))
-
-	return certPem.Bytes(), keyPem.Bytes(), combinedPEM, clientCert
-}
-
-func genServerCertificate() ([]byte, []byte, []byte, tls.Certificate) {
-	certPem, privPem, combinedPEM, cert := genCertificate(&x509.Certificate{
-		DNSNames:    []string{"localhost"},
-		IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::")},
-	})
-
-	return certPem, privPem, combinedPEM, cert
-}
-
 const (
 	internalTLSErr = "tls: internal error"
 	badcertErr     = "tls: bad certificate"
@@ -86,7 +47,7 @@ const (
 
 func TestGatewayTLS(t *testing.T) {
 	// Configure server
-	serverCertPem, serverPrivPem, combinedPEM, _ := genServerCertificate()
+	serverCertPem, serverPrivPem, combinedPEM, _ := test.GenServerCertificate()
 
 	dir, _ := ioutil.TempDir("", "certs")
 	defer os.RemoveAll(dir)
@@ -188,9 +149,10 @@ func TestGatewayTLS(t *testing.T) {
 
 func TestGatewayControlAPIMutualTLS(t *testing.T) {
 	// Configure server
-	serverCertPem, _, combinedPEM, _ := genServerCertificate()
+	serverCertPem, _, combinedPEM, _ := test.GenServerCertificate()
 
 	globalConf := config.Global()
+	// make global config changes
 	globalConf.HttpServerOptions.UseSSL = true
 	globalConf.Security.ControlAPIUseMutualTLS = true
 	config.SetGlobal(globalConf)
@@ -203,7 +165,7 @@ func TestGatewayControlAPIMutualTLS(t *testing.T) {
 		CertificateManager.FlushCache()
 	}()
 
-	clientCertPem, _, _, clientCert := genCertificate(&x509.Certificate{})
+	clientCertPem, _, _, clientCert := test.GenCertificate(&x509.Certificate{})
 	clientWithCert := getTLSClient(&clientCert, serverCertPem)
 
 	clientWithoutCert := getTLSClient(nil, nil)
@@ -256,7 +218,7 @@ func TestGatewayControlAPIMutualTLS(t *testing.T) {
 
 func TestAPIMutualTLS(t *testing.T) {
 	// Configure server
-	serverCertPem, _, combinedPEM, _ := genServerCertificate()
+	serverCertPem, _, combinedPEM, _ := test.GenServerCertificate()
 	certID, _ := CertificateManager.Add(combinedPEM, "")
 	defer CertificateManager.Delete(certID)
 
@@ -272,7 +234,7 @@ func TestAPIMutualTLS(t *testing.T) {
 	defer ts.Close()
 
 	// Initialize client certificates
-	clientCertPem, _, _, clientCert := genCertificate(&x509.Certificate{})
+	clientCertPem, _, _, clientCert := test.GenCertificate(&x509.Certificate{})
 
 	t.Run("SNI and domain per API", func(t *testing.T) {
 		t.Run("API without mutual TLS", func(t *testing.T) {
@@ -329,7 +291,7 @@ func TestAPIMutualTLS(t *testing.T) {
 		t.Run("Client certificate differ", func(t *testing.T) {
 			client := getTLSClient(&clientCert, serverCertPem)
 
-			clientCertPem2, _, _, _ := genCertificate(&x509.Certificate{})
+			clientCertPem2, _, _, _ := test.GenCertificate(&x509.Certificate{})
 			clientCertID2, _ := CertificateManager.Add(clientCertPem2, "")
 			defer CertificateManager.Delete(clientCertID2)
 
@@ -413,7 +375,7 @@ func TestAPIMutualTLS(t *testing.T) {
 }
 
 func TestUpstreamMutualTLS(t *testing.T) {
-	_, _, combinedClientPEM, clientCert := genCertificate(&x509.Certificate{})
+	_, _, combinedClientPEM, clientCert := test.GenCertificate(&x509.Certificate{})
 	clientCert.Leaf, _ = x509.ParseCertificate(clientCert.Certificate[0])
 
 	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -472,11 +434,11 @@ func TestUpstreamMutualTLS(t *testing.T) {
 }
 
 func TestKeyWithCertificateTLS(t *testing.T) {
-	_, _, combinedPEM, _ := genServerCertificate()
+	_, _, combinedPEM, _ := test.GenServerCertificate()
 	serverCertID, _ := CertificateManager.Add(combinedPEM, "")
 	defer CertificateManager.Delete(serverCertID)
 
-	_, _, _, clientCert := genCertificate(&x509.Certificate{})
+	_, _, _, clientCert := test.GenCertificate(&x509.Certificate{})
 	clientCertID := certs.HexSHA256(clientCert.Certificate[0])
 
 	globalConf := config.Global()
@@ -514,7 +476,7 @@ func TestKeyWithCertificateTLS(t *testing.T) {
 }
 
 func TestAPICertificate(t *testing.T) {
-	_, _, combinedPEM, _ := genServerCertificate()
+	_, _, combinedPEM, _ := test.GenServerCertificate()
 	serverCertID, _ := CertificateManager.Add(combinedPEM, "")
 	defer CertificateManager.Delete(serverCertID)
 
@@ -552,10 +514,10 @@ func TestAPICertificate(t *testing.T) {
 }
 
 func TestCertificateHandlerTLS(t *testing.T) {
-	_, _, combinedServerPEM, serverCert := genServerCertificate()
+	_, _, combinedServerPEM, serverCert := test.GenServerCertificate()
 	serverCertID := certs.HexSHA256(serverCert.Certificate[0])
 
-	clientPEM, _, _, clientCert := genCertificate(&x509.Certificate{})
+	clientPEM, _, _, clientCert := test.GenCertificate(&x509.Certificate{})
 	clientCertID := certs.HexSHA256(clientCert.Certificate[0])
 
 	ts := StartTest()
@@ -608,7 +570,7 @@ func TestCertificateHandlerTLS(t *testing.T) {
 
 func TestCipherSuites(t *testing.T) {
 	//configure server so we can useSSL and utilize the logic, but skip verification in the clients
-	_, _, combinedPEM, _ := genServerCertificate()
+	_, _, combinedPEM, _ := test.GenServerCertificate()
 	serverCertID, _ := CertificateManager.Add(combinedPEM, "")
 	defer CertificateManager.Delete(serverCertID)
 
