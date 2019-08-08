@@ -1,5 +1,5 @@
 import imp, sys, os
-from gateway import TykGateway as tyk
+# from gateway import TykGateway as tyk
 
 class MiddlewareLoader():
     def __init__(self, mw=None):
@@ -12,7 +12,7 @@ class MiddlewareLoader():
       self.module_path = os.path.join(self.bundle_root_path, self.base_path, module_filename)
       if not os.path.exists(self.module_path):
         error_msg = "Your bundle doesn't contain '{0}'".format(module_name)
-        tyk.log(error_msg, "error")
+        # tyk.log(error_msg, "error")
         return None
       return self
 
