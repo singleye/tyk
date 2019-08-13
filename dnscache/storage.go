@@ -1,13 +1,12 @@
 package dnscache
 
 import (
+	"fmt"
 	"net"
 	"time"
 
-	"fmt"
-
-	"github.com/sirupsen/logrus"
 	cache "github.com/pmylund/go-cache"
+	"github.com/sirupsen/logrus"
 )
 
 // DnsCacheItem represents single record in cache
